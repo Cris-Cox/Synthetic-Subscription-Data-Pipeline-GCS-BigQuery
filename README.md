@@ -4,7 +4,8 @@ Links:
 
 🚀 Overview
 
-This project simulates a large-scale batch data pipeline that generates synthetic subscription events and ingests them into BigQuery for analytics. 
+Subscription businesses need to understand whether growth is being driven by customer acquisition, renewals, or pricing. They also need visibility into churn and revenue trends across subscription plans.
+This project was built to model that workflow end to end and produce monthly metrics that can support reporting and decision-making.
 
 It follows a classic production-grade data engineering pattern:
 

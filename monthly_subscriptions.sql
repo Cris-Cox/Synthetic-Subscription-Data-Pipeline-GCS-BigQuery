@@ -69,8 +69,8 @@ churned_customers AS (
 )
 
 SELECT
-  m.subscription_month,
-  m.subscription_name,
+  m.subscription_month AS `Subscription Month`,
+  m.subscription_name AS `Subscription Name`,
   m.total_subscriptions AS `Total Subscriptions`,
   m.new_subscriptions AS `New Subscriptions`,
   m.renewals AS `Renewals`,

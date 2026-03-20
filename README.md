@@ -1,3 +1,7 @@
+Links:
+[Dashboard](https://lookerstudio.google.com/reporting/cd43d09c-9ca3-4696-91c3-1d033010ff0e)
+[Google Sheets Monthly Metric sample](https://docs.google.com/spreadsheets/d/1-Fg7Xy45WfHb70J68VlHk8YVlEIfwqC1-JC1A4EZ3uE/edit?usp=sharing)
+
 🚀 Overview
 
 This project simulates a large-scale batch data pipeline that generates synthetic subscription events and ingests them into BigQuery for analytics. 

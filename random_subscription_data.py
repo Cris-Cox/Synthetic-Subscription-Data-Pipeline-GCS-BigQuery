@@ -4,7 +4,19 @@
 #
 # Setup (run once before executing this script):
 #   gcloud auth application-default login
-#   gcloud config set project PROJECT_ID
+#   gcloud config set project (INSERT-YOUR-PROJECT-ID)
+#
+# Optional PowerShell environment variables:
+#   $env:GCP_PROJECT_ID="(INSERT-YOUR-PROJECT-ID)"
+#   $env:GCS_BUCKET_NAME="(INSERT-YOUR-PROJECT-ID)-subscriptions"
+#   $env:GCS_FOLDER="subscriptions"
+#   $env:BQ_DATASET="subscriptions"
+#   $env:BQ_TABLE="subscriptions_partitioned"
+#   $env:GCS_LOCATION="US"
+#   $env:NUM_CUSTOMERS="10000"
+#   $env:MAX_ROWS_PER_FILE="5000"
+#   $env:CREATE_BUCKET_IF_MISSING="true"
+#   $env:RECREATE_TABLE_IF_NEEDED="false"
 #
 # Run:
 #   python random_subscription_data.py
@@ -17,6 +29,7 @@
 #   5. Deletes the local temp file after upload
 #
 # BigQuery table is created on first load and appended to on subsequent loads.
+# The script validates bucket / dataset / table setup before generating data.
 # ─────────────────────────────────────────────────────────────────────────────
 
 import csv
@@ -24,11 +37,13 @@ import hashlib
 import logging
 import os
 import random
+import re
 import tempfile
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Tuple
 
+from google.api_core.exceptions import Conflict, NotFound
 from google.cloud import bigquery
 from google.cloud import storage
 
@@ -45,16 +60,21 @@ logger = logging.getLogger(__name__)
 NUM_CUSTOMERS = int(os.getenv("NUM_CUSTOMERS", 4_000_000))
 MAX_ROWS_PER_FILE = int(os.getenv("MAX_ROWS_PER_FILE", 250_000))
 
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "PROJECT_ID")
-GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "PROJECT_ID-subscriptions")
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "(INSERT-YOUR-PROJECT-ID)")
+GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "(INSERT-YOUR-PROJECT-ID)-subscriptions")
 GCS_FOLDER = os.getenv("GCS_FOLDER", "subscriptions")
+GCS_LOCATION = os.getenv("GCS_LOCATION", "US")
+
 BQ_DATASET = os.getenv("BQ_DATASET", "subscriptions")
-BQ_TABLE = os.getenv("BQ_TABLE", "subscriptions")
+BQ_TABLE = os.getenv("BQ_TABLE", "subscriptions_partitioned")
+
 GROWTH_SKEW = float(os.getenv("GROWTH_SKEW", 0.4))
+CREATE_BUCKET_IF_MISSING = os.getenv("CREATE_BUCKET_IF_MISSING", "true").lower() == "true"
+RECREATE_TABLE_IF_NEEDED = os.getenv("RECREATE_TABLE_IF_NEEDED", "false").lower() == "true"
 
 START_DATE = datetime(2023, 1, 1)
 END_DATE = datetime(2026, 2, 1)
-LOADED_AT = datetime.utcnow()
+LOADED_AT = datetime.now(UTC)
 
 
 # ── Product weights ───────────────────────────────────────────────────────────
@@ -135,6 +155,10 @@ BQ_SCHEMA = [
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+def parse_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "y"}
+
+
 def fake_id(prefix: str = "") -> str:
     return hashlib.md5((prefix + str(uuid.uuid4())).encode()).hexdigest()
 
@@ -190,6 +214,119 @@ def build_row(customer_id: str, signup_date: datetime, product: str, event_date:
         "net_amount_cents": net_amount,
         "period_type": period_type,
     }
+
+
+# ── Validation / Setup ────────────────────────────────────────────────────────
+def validate_config() -> None:
+    if not GCP_PROJECT_ID or GCP_PROJECT_ID == "PROJECT_ID":
+        raise ValueError(
+            "GCP_PROJECT_ID is missing or still set to the placeholder 'PROJECT_ID'."
+        )
+
+    if not GCS_BUCKET_NAME or GCS_BUCKET_NAME == "PROJECT_ID-subscriptions":
+        raise ValueError(
+            "GCS_BUCKET_NAME is missing or still set to the placeholder "
+            "'PROJECT_ID-subscriptions'."
+        )
+
+    if GCS_BUCKET_NAME.lower() != GCS_BUCKET_NAME:
+        raise ValueError(f"GCS bucket names must be lowercase: {GCS_BUCKET_NAME}")
+
+    bucket_regex = r"^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$"
+    if not re.match(bucket_regex, GCS_BUCKET_NAME):
+        raise ValueError(
+            f"Invalid GCS bucket name: {GCS_BUCKET_NAME}. "
+            "Use lowercase letters, numbers, dashes, underscores, or dots."
+        )
+
+    if NUM_CUSTOMERS <= 0:
+        raise ValueError("NUM_CUSTOMERS must be greater than 0.")
+
+    if MAX_ROWS_PER_FILE <= 0:
+        raise ValueError("MAX_ROWS_PER_FILE must be greater than 0.")
+
+    if START_DATE >= END_DATE:
+        raise ValueError("START_DATE must be before END_DATE.")
+
+
+def ensure_bucket(storage_client: storage.Client) -> None:
+    try:
+        storage_client.get_bucket(GCS_BUCKET_NAME)
+        logger.info("Verified bucket exists: gs://%s", GCS_BUCKET_NAME)
+    except NotFound:
+        if not CREATE_BUCKET_IF_MISSING:
+            raise ValueError(
+                f"GCS bucket does not exist: gs://{GCS_BUCKET_NAME}. "
+                "Create it manually or set CREATE_BUCKET_IF_MISSING=true."
+            )
+
+        logger.info("Bucket does not exist. Creating: gs://%s", GCS_BUCKET_NAME)
+        bucket = storage.Bucket(storage_client, name=GCS_BUCKET_NAME)
+        bucket.location = GCS_LOCATION
+        storage_client.create_bucket(bucket, project=GCP_PROJECT_ID)
+        logger.info("Created bucket: gs://%s in %s", GCS_BUCKET_NAME, GCS_LOCATION)
+
+
+def ensure_dataset(bq_client: bigquery.Client) -> None:
+    dataset_id = f"{GCP_PROJECT_ID}.{BQ_DATASET}"
+
+    try:
+        bq_client.get_dataset(dataset_id)
+        logger.info("Verified dataset exists: %s", dataset_id)
+    except NotFound:
+        logger.info("Dataset does not exist. Creating: %s", dataset_id)
+        dataset = bigquery.Dataset(dataset_id)
+        dataset.location = GCS_LOCATION
+        bq_client.create_dataset(dataset, exists_ok=True)
+        logger.info("Created dataset: %s", dataset_id)
+
+
+def table_has_expected_layout(table: bigquery.Table) -> bool:
+    time_partitioning_ok = (
+        table.time_partitioning is not None
+        and table.time_partitioning.type_ == "DAY"
+        and table.time_partitioning.field == "created_at"
+    )
+
+    clustering_ok = table.clustering_fields == ["subscription_name", "customer_id"]
+
+    return time_partitioning_ok and clustering_ok
+
+
+def recreate_table(bq_client: bigquery.Client, table_ref: str) -> None:
+    logger.warning("Deleting existing table so it can be recreated with the expected layout: %s", table_ref)
+    bq_client.delete_table(table_ref, not_found_ok=True)
+    logger.info("Deleted table: %s", table_ref)
+
+
+def ensure_table_layout(bq_client: bigquery.Client) -> None:
+    table_ref = f"{GCP_PROJECT_ID}.{BQ_DATASET}.{BQ_TABLE}"
+
+    try:
+        table = bq_client.get_table(table_ref)
+        logger.info("Verified table exists: %s", table_ref)
+
+        if table_has_expected_layout(table):
+            logger.info("Existing table has the expected partitioning and clustering.")
+            return
+
+        message = (
+            f"Existing table {table_ref} does not match the expected layout. "
+            "Expected daily partitioning on created_at and clustering on "
+            "(subscription_name, customer_id)."
+        )
+
+        if RECREATE_TABLE_IF_NEEDED:
+            logger.warning("%s RECREATE_TABLE_IF_NEEDED=true, so the table will be recreated.", message)
+            recreate_table(bq_client, table_ref)
+        else:
+            raise ValueError(
+                f"{message} Either delete the table manually, change BQ_TABLE to a new name, "
+                "or set RECREATE_TABLE_IF_NEEDED=true."
+            )
+
+    except NotFound:
+        logger.info("Table does not exist yet and will be created on first load: %s", table_ref)
 
 
 # ── GCS Upload ────────────────────────────────────────────────────────────────
@@ -251,15 +388,23 @@ def finalize_chunk(
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main() -> None:
+    validate_config()
+
     logger.info("Starting synthetic subscription pipeline")
     logger.info("Project: %s", GCP_PROJECT_ID)
     logger.info("Bucket: %s", GCS_BUCKET_NAME)
     logger.info("BigQuery table: %s.%s.%s", GCP_PROJECT_ID, BQ_DATASET, BQ_TABLE)
     logger.info("Customers to generate: %s", f"{NUM_CUSTOMERS:,}")
     logger.info("Max rows per file: %s", f"{MAX_ROWS_PER_FILE:,}")
+    logger.info("Bucket auto-create enabled: %s", CREATE_BUCKET_IF_MISSING)
+    logger.info("Table auto-recreate enabled: %s", RECREATE_TABLE_IF_NEEDED)
 
     storage_client = storage.Client(project=GCP_PROJECT_ID)
     bq_client = bigquery.Client(project=GCP_PROJECT_ID)
+
+    ensure_bucket(storage_client)
+    ensure_dataset(bq_client)
+    ensure_table_layout(bq_client)
 
     file_index = 1
     rows_in_file = 0
@@ -310,7 +455,13 @@ def main() -> None:
 
         tmp_file.close()
         logger.info("Finished final part %s with %s rows", file_index, f"{rows_in_file:,}")
-        finalize_chunk(storage_client, bq_client, tmp_file.name, file_index)
+
+        if rows_in_file > 0:
+            finalize_chunk(storage_client, bq_client, tmp_file.name, file_index)
+        else:
+            if os.path.exists(tmp_file.name):
+                os.unlink(tmp_file.name)
+                logger.info("Deleted empty temp file: %s", tmp_file.name)
 
     except Exception as exc:
         logger.exception("Pipeline failed: %s", exc)

@@ -77,8 +77,8 @@ SELECT
   m.total_revenue AS `Total Revenue`,
   m.new_subscription_revenue AS `New Subscription Revenue`,
   m.renewal_revenue AS `Renewal Revenue`,
-  COALESCE(s.churned_customers, 0) AS `Stopped Customers`,
-  COALESCE(s.lost_revenue, 0) AS `Stopped Revenue`
+  COALESCE(s.churned_customers, 0) AS `Churned Customers`,
+  COALESCE(s.lost_revenue, 0) AS `Churned Revenue`
 FROM subscription_metrics m
 LEFT JOIN churned_customers s
   ON m.subscription_month = s.subscription_month

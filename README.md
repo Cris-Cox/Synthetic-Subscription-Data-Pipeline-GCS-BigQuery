@@ -1,0 +1,1 @@
+# Synthetic-Subscription-Data-Pipeline-GCS-BigQuery

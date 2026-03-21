@@ -4,14 +4,14 @@
 #
 # Setup (run once before executing this script):
 #   gcloud auth application-default login
-#   gcloud config set project (INSERT-YOUR-PROJECT-ID)
+#   gcloud config set project "PROJECT_ID_HERE"
 #
 # Optional PowerShell environment variables:
-#   $env:GCP_PROJECT_ID="(INSERT-YOUR-PROJECT-ID)"
-#   $env:GCS_BUCKET_NAME="(INSERT-YOUR-PROJECT-ID)-subscriptions"
+#   $env:GCP_PROJECT_ID=""PROJECT_ID_HERE""
+#   $env:GCS_BUCKET_NAME=""PROJECT_ID_HERE"-subscriptions"
 #   $env:GCS_FOLDER="subscriptions"
 #   $env:BQ_DATASET="subscriptions"
-#   $env:BQ_TABLE="subscriptions_partitioned"
+#   $env:BQ_TABLE="subscriptions"
 #   $env:GCS_LOCATION="US"
 #   $env:NUM_CUSTOMERS="10000"
 #   $env:MAX_ROWS_PER_FILE="5000"
@@ -60,13 +60,13 @@ logger = logging.getLogger(__name__)
 NUM_CUSTOMERS = int(os.getenv("NUM_CUSTOMERS", 4_000_000))
 MAX_ROWS_PER_FILE = int(os.getenv("MAX_ROWS_PER_FILE", 250_000))
 
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "(INSERT-YOUR-PROJECT-ID)")
-GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "(INSERT-YOUR-PROJECT-ID)-subscriptions")
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", ""PROJECT_ID_HERE"")
+GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", ""BUCKET_NAME_HERE"-subscriptions")
 GCS_FOLDER = os.getenv("GCS_FOLDER", "subscriptions")
 GCS_LOCATION = os.getenv("GCS_LOCATION", "US")
 
 BQ_DATASET = os.getenv("BQ_DATASET", "subscriptions")
-BQ_TABLE = os.getenv("BQ_TABLE", "subscriptions_partitioned")
+BQ_TABLE = os.getenv("BQ_TABLE", "subscriptions")
 
 GROWTH_SKEW = float(os.getenv("GROWTH_SKEW", 0.4))
 CREATE_BUCKET_IF_MISSING = os.getenv("CREATE_BUCKET_IF_MISSING", "true").lower() == "true"
